@@ -25,6 +25,22 @@ _real_cepstrum_kernel = cp.ElementwiseKernel(
 )
 
 
+code = r'''
+#include <cupy/complex.cuh>
+__device__ cufftDoubleComplex CB_ConvertInputZ(
+    void *dataIn,
+    size_t offset,
+    void *callerInfo,
+    void *sharedPtr)
+{
+    auto x = reinterpret_cast<complex<double>*>(dataIn)[offset];
+    auto y = log(abs(x));
+    return make_cuDoubleComplex(y, 0);
+}
+__device__ cufftCallbackLoadZ d_loadCallbackPtr = CB_ConvertInputZ;
+'''
+
+
 def real_cepstrum(x, n=None, axis=-1):
     r"""
     Calculates the real cepstrum of an input sequence x where the cepstrum is
@@ -48,8 +64,9 @@ def real_cepstrum(x, n=None, axis=-1):
     """
     x = cp.asarray(x)
     spectrum = cp.fft.fft(x, n=n, axis=axis)
-    spectrum = _real_cepstrum_kernel(spectrum)
-    return cp.fft.ifft(spectrum, n=n, axis=axis).real
+t
+    with cp.fft.config.set_cufft_callbacks(cb_load=code):
+        return cp.fft.ifft(spectrum, n=n, axis=axis).real
 
 
 _complex_cepstrum_kernel = cp.ElementwiseKernel(
