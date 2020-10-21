@@ -25,7 +25,7 @@ _real_cepstrum_kernel = cp.ElementwiseKernel(
 )
 
 
-code = r'''
+code = r"""
 #include <cupy/complex.cuh>
 __device__ cufftDoubleComplex CB_ConvertInputZ(
     void *dataIn,
@@ -38,7 +38,7 @@ __device__ cufftDoubleComplex CB_ConvertInputZ(
     return make_cuDoubleComplex(y, 0);
 }
 __device__ cufftCallbackLoadZ d_loadCallbackPtr = CB_ConvertInputZ;
-'''
+"""
 
 
 def real_cepstrum(x, n=None, axis=-1):
@@ -64,7 +64,7 @@ def real_cepstrum(x, n=None, axis=-1):
     """
     x = cp.asarray(x)
     spectrum = cp.fft.fft(x, n=n, axis=axis)
-t
+
     with cp.fft.config.set_cufft_callbacks(cb_load=code):
         return cp.fft.ifft(spectrum, n=n, axis=axis).real
 
@@ -175,6 +175,58 @@ _minimum_phase_kernel = cp.ElementwiseKernel(
 )
 
 
+_minimum_phase_cb_load = r"""
+#include <cupy/complex.cuh>
+
+struct cb_lParams {
+    size_t len;
+};
+
+__device__ cufftDoubleComplex CB_ConvertInputZ(
+    void *dataIn,
+    size_t offset,
+    void *callerInfo,
+    void *sharedPtr)
+{
+    auto ceps { static_cast<complex<double>*>(dataIn)[offset] };
+    cb_lParams *params { static_cast<cb_lParams *>( callerInfo ) };
+
+    const int odd { static_cast<int>( params->len & 1 ) };
+    const int bend { static_cast<int>( 0.5 * ( params->len + odd ) ) };
+
+    complex<double> window {};
+
+    if ( !offset ) {
+        window = ceps;
+    } else if ( offset < bend ) {
+        window = ceps * 2.0;
+    } else if ( offset == bend ) {
+        window = ceps * static_cast<double>( 1 - odd );
+    }
+
+    return *reinterpret_cast<cufftDoubleComplex*>(&window);
+}
+__device__ cufftCallbackLoadZ d_loadCallbackPtr = CB_ConvertInputZ;
+"""
+
+_minimum_phase_cb_store = r"""
+__device__ void CB_ConvertOutputZ(
+    void* dataOut,
+    size_t offset,
+    cufftDoubleComplex element,
+    void* callerInfo,
+    void* sharedPointer)
+{
+    auto x = *reinterpret_cast<complex<double>*>(&element);
+    x = exp(x);
+    static_cast<cufftDoubleComplex*>(dataOut)[offset] =
+        *reinterpret_cast<cufftDoubleComplex*>(&x);
+}
+
+__device__ cufftCallbackStoreZ d_storeCallbackPtr = CB_ConvertOutputZ;
+"""
+
+
 def minimum_phase(x, n=None):
     r"""Compute the minimum phase reconstruction of a real sequence.
     x : ndarray
@@ -191,7 +243,20 @@ def minimum_phase(x, n=None):
     if n is None:
         n = len(x)
     ceps = real_cepstrum(x, n=n)
-    window = _minimum_phase_kernel(ceps)
-    m = cp.fft.ifft(cp.exp(cp.fft.fft(window))).real
+    # window = _minimum_phase_kernel(ceps)
+    # m = cp.fft.ifft(cp.exp(cp.fft.fft(window))).real
+
+    struct = cp.empty((8,), dtype=cp.int8)
+    c = struct[0:8].view(cp.uint64)
+    c[...] = n
+
+    with cp.fft.config.set_cufft_callbacks(
+        cb_load=_minimum_phase_cb_load,
+        cb_load_aux_arr=struct,
+        cb_store=_minimum_phase_cb_store,
+    ):
+        window = cp.fft.fft(ceps)
+
+    m = cp.fft.ifft(window).real
 
     return m

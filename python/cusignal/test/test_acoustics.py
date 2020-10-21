@@ -237,8 +237,8 @@ class TestAcoustics:
             array_equal(output, key)
 
     @pytest.mark.benchmark(group="MinimumPhase")
-    @pytest.mark.parametrize("num_samps", [2 ** 8, 2 ** 14])
-    @pytest.mark.parametrize("n", [123, 256])
+    @pytest.mark.parametrize("num_samps", [2 ** 8, 2 ** 14, 2**20])
+    @pytest.mark.parametrize("n", [None, 123, 256, 2**14])
     class TestMinimumPhase:
         def cpu_version(self, sig, n):
             return minimum_phase(sig, n)
